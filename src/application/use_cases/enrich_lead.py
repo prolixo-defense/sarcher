@@ -9,7 +9,7 @@ Both paths are preserved for backward compatibility.
 from datetime import datetime, timezone
 
 from src.domain.entities.lead import Lead
-from src.domain.enums import EnrichmentStatus
+from src.domain.enums import EnrichmentStatus, LeadStatus
 from src.domain.interfaces.enrichment_adapter import EnrichmentAdapter
 from src.domain.interfaces.lead_repository import LeadRepository
 
@@ -53,6 +53,7 @@ class EnrichLead:
         try:
             enriched = self._adapter.enrich(lead)
             enriched.enrichment_status = EnrichmentStatus.COMPLETED
+            enriched.status = LeadStatus.ENRICHED
             enriched.updated_at = datetime.now(timezone.utc)
             return self._repo.save(enriched)
         except Exception:
@@ -90,6 +91,7 @@ class EnrichLead:
         try:
             enriched = await self._pipeline.enrich(lead)
             enriched.enrichment_status = EnrichmentStatus.COMPLETED
+            enriched.status = LeadStatus.ENRICHED
             enriched.updated_at = datetime.now(timezone.utc)
             return self._repo.save(enriched)
         except Exception:
