@@ -39,6 +39,8 @@ dependencies = [
     "sentence-transformers>=3.0.0",
     "apscheduler>=3.10.0",
     "croniter>=2.0.0",
+    # Phase 5 - Visual Dashboard & Discovery
+    "sse-starlette>=2.0.0",
 ]
 
 [project.optional-dependencies]

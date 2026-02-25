@@ -1,0 +1,1208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Networking Engine</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+  <style>
+    body { font-family: 'Inter', system-ui, -apple-system, sans-serif; }
+    .mono { font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace; }
+    @keyframes pulse-bar { 0%,100%{opacity:1} 50%{opacity:.6} }
+    .animate-pulse-bar { animation: pulse-bar 1.5s ease-in-out infinite; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #f1f5f9; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+    .tab-active { border-bottom: 2px solid #3b82f6; color: #3b82f6; }
+    .result-row:hover { background: #f8fafc; }
+    .copy-btn { opacity: 0; transition: opacity 0.15s; }
+    .result-row:hover .copy-btn { opacity: 1; }
+  </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+// ─── API helpers ─────────────────────────────────────────────────────────────
+
+async function apiFetch(path, options = {}) {
+  const res = await fetch(path, {
+    headers: { 'Content-Type': 'application/json', ...options.headers },
+    ...options,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`${res.status}: ${text}`);
+  }
+  const ct = res.headers.get('content-type') || '';
+  return ct.includes('application/json') ? res.json() : res.text();
+}
+
+// ─── Status badge helper ──────────────────────────────────────────────────────
+
+function StatusBadge({ status }) {
+  const map = {
+    raw: 'bg-blue-100 text-blue-700',
+    enriched: 'bg-green-100 text-green-700',
+    verified: 'bg-emerald-100 text-emerald-700',
+    contacted: 'bg-purple-100 text-purple-700',
+    responded: 'bg-indigo-100 text-indigo-700',
+    qualified: 'bg-teal-100 text-teal-700',
+    disqualified: 'bg-gray-100 text-gray-500',
+    opted_out: 'bg-red-100 text-red-600',
+    completed: 'bg-green-100 text-green-700',
+    pending: 'bg-yellow-100 text-yellow-700',
+    in_progress: 'bg-blue-100 text-blue-700',
+    failed: 'bg-red-100 text-red-600',
+    active: 'bg-green-100 text-green-700',
+    draft: 'bg-gray-100 text-gray-600',
+    paused: 'bg-yellow-100 text-yellow-700',
+  };
+  const cls = map[status] || 'bg-gray-100 text-gray-600';
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${cls}`}>
+      {status}
+    </span>
+  );
+}
+
+// ─── Source badge ─────────────────────────────────────────────────────────────
+
+function SourceBadge({ source }) {
+  const map = {
+    website: 'bg-sky-100 text-sky-700',
+    linkedin: 'bg-blue-100 text-blue-800',
+    directory: 'bg-amber-100 text-amber-700',
+    corporate_website: 'bg-sky-100 text-sky-700',
+    business_directory: 'bg-amber-100 text-amber-700',
+    apollo: 'bg-violet-100 text-violet-700',
+    hunter: 'bg-orange-100 text-orange-700',
+    manual: 'bg-gray-100 text-gray-600',
+  };
+  const display = (source || '').replace('_', ' ');
+  const cls = map[source] || 'bg-gray-100 text-gray-600';
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${cls}`}>
+      {display}
+    </span>
+  );
+}
+
+// ─── Relevance score badge ────────────────────────────────────────────────────
+
+function ScoreBadge({ score }) {
+  const cls = score >= 80
+    ? 'bg-green-100 text-green-700'
+    : score >= 50
+    ? 'bg-yellow-100 text-yellow-700'
+    : 'bg-red-100 text-red-600';
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${cls}`}>
+      {score}%
+    </span>
+  );
+}
+
+// ─── Copy button ──────────────────────────────────────────────────────────────
+
+function CopyBtn({ text }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+  return (
+    <button
+      onClick={copy}
+      className="copy-btn ml-1 text-gray-400 hover:text-gray-700 text-xs"
+      title="Copy"
+    >
+      {copied ? '✓' : '⎘'}
+    </button>
+  );
+}
+
+// ─── Progress bar ─────────────────────────────────────────────────────────────
+
+function ProgressBar({ stage, progress, message }) {
+  const stageColors = {
+    interpreting: 'bg-blue-500',
+    searching: 'bg-blue-500',
+    scraping: 'bg-yellow-500',
+    extracting: 'bg-yellow-500',
+    matching: 'bg-green-500',
+    enriching: 'bg-green-500',
+    saving: 'bg-green-500',
+    complete: 'bg-green-500',
+    error: 'bg-red-500',
+  };
+  const color = stageColors[stage] || 'bg-blue-500';
+  const isRunning = stage && stage !== 'complete' && stage !== 'error';
+
+  return (
+    <div className="bg-white rounded-lg border border-gray-200 p-4 shadow-sm">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-sm font-medium text-gray-700 capitalize">{stage || 'Starting...'}</span>
+        <span className="text-sm text-gray-500">{progress}%</span>
+      </div>
+      <div className="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
+        <div
+          className={`h-2 rounded-full transition-all duration-500 ${color} ${isRunning ? 'animate-pulse-bar' : ''}`}
+          style={{ width: `${progress}%` }}
+        />
+      </div>
+      {message && (
+        <p className="mt-2 text-sm text-gray-600">{message}</p>
+      )}
+    </div>
+  );
+}
+
+// ─── Query interpretation panel ───────────────────────────────────────────────
+
+function InterpretationPanel({ interp }) {
+  if (!interp) return null;
+  const items = [
+    { label: 'Titles', values: interp.target_titles },
+    { label: 'Companies', values: interp.target_companies },
+    { label: 'Industries', values: interp.target_industries },
+    { label: 'Locations', values: interp.target_locations },
+    { label: 'Keywords', values: interp.keywords },
+  ].filter(i => i.values && i.values.length > 0);
+
+  if (items.length === 0 && (!interp.search_queries || interp.search_queries.length === 0)) return null;
+
+  return (
+    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-2">
+      <h3 className="text-sm font-semibold text-blue-800">Search Interpretation</h3>
+      {items.map(({ label, values }) => (
+        <div key={label} className="flex gap-2">
+          <span className="text-xs font-medium text-blue-600 w-20 shrink-0 pt-0.5">{label}:</span>
+          <div className="flex flex-wrap gap-1">
+            {values.map((v, i) => (
+              <span key={i} className="bg-white border border-blue-200 text-blue-700 text-xs px-2 py-0.5 rounded">{v}</span>
+            ))}
+          </div>
+        </div>
+      ))}
+      {interp.search_queries && interp.search_queries.length > 0 && (
+        <div className="flex gap-2">
+          <span className="text-xs font-medium text-blue-600 w-20 shrink-0 pt-0.5">Queries:</span>
+          <div className="space-y-1">
+            {interp.search_queries.map((q, i) => (
+              <div key={i} className="mono text-xs text-blue-800 bg-white border border-blue-100 px-2 py-0.5 rounded">
+                {q}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Results table ────────────────────────────────────────────────────────────
+
+function ResultsTable({ results, onEnrich, onAddToCampaign, onRemove, showScore = true }) {
+  const [sortKey, setSortKey] = useState('relevance_score');
+  const [sortDir, setSortDir] = useState('desc');
+  const [filter, setFilter] = useState({ hasEmail: false, hasPhone: false, enriched: false });
+  const [selected, setSelected] = useState(new Set());
+  const [expanded, setExpanded] = useState(null);
+
+  const toggleSort = (key) => {
+    if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortKey(key); setSortDir('desc'); }
+  };
+
+  const filtered = results.filter(r => {
+    if (filter.hasEmail && !r.email) return false;
+    if (filter.hasPhone && !r.phone) return false;
+    if (filter.enriched && r.enrichment_status !== 'completed') return false;
+    return true;
+  });
+
+  const sorted = [...filtered].sort((a, b) => {
+    const av = a[sortKey] ?? '';
+    const bv = b[sortKey] ?? '';
+    const cmp = typeof av === 'number'
+      ? av - bv
+      : String(av).localeCompare(String(bv));
+    return sortDir === 'asc' ? cmp : -cmp;
+  });
+
+  const toggleSelect = (name) => setSelected(s => {
+    const next = new Set(s);
+    next.has(name) ? next.delete(name) : next.add(name);
+    return next;
+  });
+
+  const toggleAll = () => {
+    if (selected.size === sorted.length) setSelected(new Set());
+    else setSelected(new Set(sorted.map(r => r.name)));
+  };
+
+  const SortHeader = ({ col, label }) => (
+    <th
+      className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase cursor-pointer hover:text-gray-700 whitespace-nowrap"
+      onClick={() => toggleSort(col)}
+    >
+      {label} {sortKey === col ? (sortDir === 'asc' ? '↑' : '↓') : ''}
+    </th>
+  );
+
+  if (results.length === 0) return null;
+
+  return (
+    <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
+      {/* Filters */}
+      <div className="flex items-center gap-4 px-4 py-3 border-b border-gray-100 bg-gray-50 flex-wrap">
+        <span className="text-sm text-gray-500">{filtered.length} of {results.length} results</span>
+        <div className="flex gap-3 ml-auto">
+          {[
+            { key: 'hasEmail', label: 'Has Email' },
+            { key: 'hasPhone', label: 'Has Phone' },
+            { key: 'enriched', label: 'Enriched' },
+          ].map(({ key, label }) => (
+            <label key={key} className="flex items-center gap-1 cursor-pointer text-sm text-gray-600">
+              <input
+                type="checkbox"
+                className="rounded text-blue-500"
+                checked={filter[key]}
+                onChange={e => setFilter(f => ({ ...f, [key]: e.target.checked }))}
+              />
+              {label}
+            </label>
+          ))}
+        </div>
+      </div>
+
+      {/* Table */}
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50 border-b border-gray-200">
+            <tr>
+              <th className="px-4 py-2 w-8">
+                <input type="checkbox" checked={selected.size === sorted.length && sorted.length > 0}
+                  onChange={toggleAll} className="rounded" />
+              </th>
+              <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase">#</th>
+              <SortHeader col="name" label="Name" />
+              <SortHeader col="title" label="Title" />
+              <SortHeader col="company" label="Company" />
+              <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase">Email</th>
+              <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase">Phone</th>
+              <SortHeader col="location" label="Location" />
+              <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase">Source</th>
+              {showScore && <SortHeader col="relevance_score" label="Relevance" />}
+              <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase">Status</th>
+              <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {sorted.map((r, idx) => (
+              <React.Fragment key={r.name + idx}>
+                <tr
+                  className="result-row cursor-pointer"
+                  onClick={() => setExpanded(expanded === idx ? null : idx)}
+                >
+                  <td className="px-4 py-2" onClick={e => e.stopPropagation()}>
+                    <input type="checkbox" checked={selected.has(r.name)}
+                      onChange={() => toggleSelect(r.name)} className="rounded" />
+                  </td>
+                  <td className="px-4 py-2 text-gray-400">{idx + 1}</td>
+                  <td className="px-4 py-2 font-medium text-gray-900">
+                    {r.linkedin
+                      ? <a href={r.linkedin.startsWith('http') ? r.linkedin : 'https://' + r.linkedin}
+                           target="_blank" rel="noreferrer"
+                           className="text-blue-600 hover:underline"
+                           onClick={e => e.stopPropagation()}>
+                          {r.name}
+                        </a>
+                      : r.name}
+                  </td>
+                  <td className="px-4 py-2 text-gray-600">{r.title || '—'}</td>
+                  <td className="px-4 py-2 text-gray-600">{r.company || '—'}</td>
+                  <td className="px-4 py-2">
+                    {r.email
+                      ? <span className="mono text-xs text-gray-700 flex items-center">
+                          {r.email} <CopyBtn text={r.email} />
+                        </span>
+                      : <span className="text-gray-300">—</span>}
+                  </td>
+                  <td className="px-4 py-2">
+                    {r.phone
+                      ? <span className="mono text-xs text-gray-700 flex items-center">
+                          {r.phone} <CopyBtn text={r.phone} />
+                        </span>
+                      : <span className="text-gray-300">—</span>}
+                  </td>
+                  <td className="px-4 py-2 text-gray-600 text-xs">{r.location || '—'}</td>
+                  <td className="px-4 py-2">
+                    <SourceBadge source={r.source} />
+                  </td>
+                  {showScore && (
+                    <td className="px-4 py-2">
+                      <ScoreBadge score={r.relevance_score || 0} />
+                    </td>
+                  )}
+                  <td className="px-4 py-2">
+                    <StatusBadge status={r.enrichment_status || r.status || 'pending'} />
+                  </td>
+                  <td className="px-4 py-2" onClick={e => e.stopPropagation()}>
+                    <div className="flex gap-1">
+                      {onEnrich && (
+                        <button onClick={() => onEnrich(r)}
+                          className="text-xs text-blue-600 hover:text-blue-800 px-2 py-0.5 border border-blue-200 rounded hover:bg-blue-50">
+                          Enrich
+                        </button>
+                      )}
+                      {onAddToCampaign && (
+                        <button onClick={() => onAddToCampaign(r)}
+                          className="text-xs text-purple-600 hover:text-purple-800 px-2 py-0.5 border border-purple-200 rounded hover:bg-purple-50">
+                          + Camp.
+                        </button>
+                      )}
+                      {onRemove && (
+                        <button onClick={() => onRemove(r)}
+                          className="text-xs text-red-400 hover:text-red-600 px-2 py-0.5 border border-red-100 rounded hover:bg-red-50">
+                          ✕
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+                {expanded === idx && (
+                  <tr className="bg-blue-50">
+                    <td colSpan={showScore ? 12 : 11} className="px-6 py-3">
+                      <div className="grid grid-cols-2 gap-4 text-xs">
+                        <div className="space-y-1">
+                          <div><span className="font-medium text-gray-500">Full Name:</span> <span className="text-gray-800">{r.name}</span></div>
+                          <div><span className="font-medium text-gray-500">First:</span> <span className="text-gray-800">{r.first_name || '—'}</span></div>
+                          <div><span className="font-medium text-gray-500">Last:</span> <span className="text-gray-800">{r.last_name || '—'}</span></div>
+                          <div><span className="font-medium text-gray-500">LinkedIn:</span>
+                            {r.linkedin
+                              ? <a href={r.linkedin.startsWith('http') ? r.linkedin : 'https://' + r.linkedin}
+                                   target="_blank" rel="noreferrer"
+                                   className="text-blue-600 hover:underline ml-1">{r.linkedin}</a>
+                              : <span className="text-gray-400 ml-1">—</span>}
+                          </div>
+                        </div>
+                        <div className="space-y-1">
+                          <div><span className="font-medium text-gray-500">Confidence:</span> <span className="text-gray-800">{((r.confidence || 0) * 100).toFixed(0)}%</span></div>
+                          <div><span className="font-medium text-gray-500">Enrichment:</span> <StatusBadge status={r.enrichment_status || 'pending'} /></div>
+                          <div><span className="font-medium text-gray-500">Source:</span> <SourceBadge source={r.source} /></div>
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </React.Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ─── Export buttons ───────────────────────────────────────────────────────────
+
+function ExportButtons({ results }) {
+  const exportCSV = () => {
+    if (!results.length) return;
+    const headers = ['Name', 'Title', 'Company', 'Email', 'Phone', 'Location', 'LinkedIn', 'Source', 'Relevance', 'Enrichment'];
+    const rows = results.map(r => [
+      r.name, r.title, r.company, r.email, r.phone,
+      r.location, r.linkedin, r.source, r.relevance_score, r.enrichment_status,
+    ].map(v => `"${(v ?? '').toString().replace(/"/g, '""')}"`).join(','));
+    const csv = [headers.join(','), ...rows].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'leads.csv'; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportJSON = () => {
+    if (!results.length) return;
+    const blob = new Blob([JSON.stringify(results, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'leads.json'; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div className="flex gap-2">
+      <button onClick={exportCSV}
+        className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 text-gray-700 flex items-center gap-1">
+        ⬇ Export CSV
+      </button>
+      <button onClick={exportJSON}
+        className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 text-gray-700 flex items-center gap-1">
+        ⬇ Export JSON
+      </button>
+    </div>
+  );
+}
+
+// ─── Pipeline stats ───────────────────────────────────────────────────────────
+
+function PipelineStats({ stats }) {
+  if (!stats) return null;
+  return (
+    <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-4">
+      <h3 className="text-sm font-semibold text-gray-700 mb-3">Pipeline Stats</h3>
+      <div className="grid grid-cols-3 md:grid-cols-6 gap-4">
+        {[
+          { label: 'Pages Scraped', value: stats.pages_scraped },
+          { label: 'People Found', value: stats.people_found },
+          { label: 'Matched', value: stats.people_matched },
+          { label: 'Enriched', value: stats.people_enriched },
+          { label: 'Time', value: `${stats.time_elapsed_seconds}s` },
+          { label: 'Credits', value: stats.credits_used ?? '—' },
+        ].map(({ label, value }) => (
+          <div key={label} className="text-center">
+            <div className="text-xl font-bold text-gray-800">{value ?? 0}</div>
+            <div className="text-xs text-gray-500 mt-0.5">{label}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Search box ───────────────────────────────────────────────────────────────
+
+function SearchBox({ onResults, onProgress }) {
+  const [query, setQuery] = useState('');
+  const [running, setRunning] = useState(false);
+  const [mode, setMode] = useState('quick');
+  const esRef = useRef(null);
+
+  const startSearch = async (searchMode) => {
+    if (!query.trim() || running) return;
+    setRunning(true);
+    setMode(searchMode);
+    onProgress({ stage: 'interpreting', message: 'Starting...', progress: 0 });
+    onResults(null);
+
+    try {
+      // Start the job
+      const job = await apiFetch('/api/discover', {
+        method: 'POST',
+        body: JSON.stringify({
+          query: query.trim(),
+          mode: searchMode,
+          max_results: 25,
+          enrich: searchMode === 'full',
+          save: true,
+        }),
+      });
+
+      // Open SSE stream
+      const es = new EventSource(job.stream_url);
+      esRef.current = es;
+
+      es.addEventListener('ping', () => {}); // keepalive
+
+      const stages = ['interpreting','searching','scraping','extracting','matching','enriching','saving'];
+      stages.forEach(stage => {
+        es.addEventListener(stage, (e) => {
+          const data = JSON.parse(e.data);
+          onProgress(data);
+        });
+      });
+
+      es.addEventListener('complete', (e) => {
+        const data = JSON.parse(e.data);
+        onProgress({ stage: 'complete', message: data.message, progress: 100 });
+        onResults({ results: data.results || [], stats: data.stats, interpretation: data.query_interpretation });
+        es.close();
+        setRunning(false);
+      });
+
+      es.addEventListener('error', (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          onProgress({ stage: 'error', message: data.message || 'Search failed', progress: 0 });
+        } catch (_) {
+          onProgress({ stage: 'error', message: 'Connection error', progress: 0 });
+        }
+        es.close();
+        setRunning(false);
+      });
+
+      es.onerror = () => {
+        if (es.readyState === EventSource.CLOSED) {
+          setRunning(false);
+        }
+      };
+
+    } catch (err) {
+      onProgress({ stage: 'error', message: err.message, progress: 0 });
+      setRunning(false);
+    }
+  };
+
+  const cancel = () => {
+    if (esRef.current) { esRef.current.close(); esRef.current = null; }
+    setRunning(false);
+    onProgress(null);
+  };
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-lg">🔍</span>
+        <span className="font-semibold text-gray-800">Natural Language Lead Discovery</span>
+      </div>
+      <textarea
+        className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent placeholder-gray-400"
+        rows={4}
+        value={query}
+        onChange={e => setQuery(e.target.value)}
+        placeholder={"Describe who you want to find...\n\nExamples:\n• marketing directors at SaaS companies in New York\n• CTO or VP Engineering at fintech startups with 50-200 employees\n• people who work at Stripe, Notion, or Linear in product roles"}
+        disabled={running}
+        onKeyDown={e => {
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) startSearch('quick');
+        }}
+      />
+      <div className="flex items-center justify-between mt-3 flex-wrap gap-2">
+        <span className="text-xs text-gray-400">⌘↵ Quick Search</span>
+        <div className="flex gap-2">
+          {running ? (
+            <button onClick={cancel}
+              className="px-4 py-2 text-sm bg-red-50 border border-red-200 text-red-600 rounded-lg hover:bg-red-100">
+              Cancel
+            </button>
+          ) : (
+            <>
+              <button
+                onClick={() => startSearch('quick')}
+                disabled={!query.trim()}
+                className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed font-medium">
+                Quick Search
+              </button>
+              <button
+                onClick={() => startSearch('full')}
+                disabled={!query.trim()}
+                className="px-4 py-2 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-40 disabled:cursor-not-allowed font-medium">
+                Full Pipeline ✨
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Dashboard tab ────────────────────────────────────────────────────────────
+
+function DashboardView() {
+  const [progress, setProgress] = useState(null);
+  const [searchResults, setSearchResults] = useState(null);
+  const [stats, setStats] = useState(null);
+
+  useEffect(() => {
+    apiFetch('/api/dashboard/stats')
+      .then(setStats)
+      .catch(() => {});
+  }, []);
+
+  const handleResults = (data) => {
+    setSearchResults(data);
+  };
+
+  const handleProgress = (p) => {
+    setProgress(p);
+  };
+
+  const showProgress = progress && progress.stage && progress.stage !== 'complete';
+
+  return (
+    <div className="space-y-4">
+      {/* Quick stats bar */}
+      {stats && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {[
+            { label: 'Total Leads', value: stats.leads?.total ?? 0, icon: '👤' },
+            { label: 'Campaigns', value: stats.campaigns?.total ?? 0, icon: '📧' },
+            { label: 'Sent', value: stats.messages?.sent ?? 0, icon: '✉️' },
+            { label: 'Pending Drafts', value: stats.messages?.drafts_pending_review ?? 0, icon: '✏️' },
+          ].map(({ label, value, icon }) => (
+            <div key={label} className="bg-white rounded-lg border border-gray-200 shadow-sm p-4 flex items-center gap-3">
+              <span className="text-2xl">{icon}</span>
+              <div>
+                <div className="text-xl font-bold text-gray-800">{value}</div>
+                <div className="text-xs text-gray-500">{label}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Search box */}
+      <SearchBox onResults={handleResults} onProgress={handleProgress} />
+
+      {/* Query interpretation */}
+      {progress && progress.interpretation && (
+        <InterpretationPanel interp={progress.interpretation} />
+      )}
+      {searchResults && searchResults.interpretation && !showProgress && (
+        <InterpretationPanel interp={searchResults.interpretation} />
+      )}
+
+      {/* Progress bar */}
+      {showProgress && (
+        <ProgressBar
+          stage={progress.stage}
+          progress={progress.progress || 0}
+          message={progress.message}
+        />
+      )}
+
+      {/* Results */}
+      {searchResults && searchResults.results && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="font-semibold text-gray-800">
+              Results ({searchResults.results.length})
+            </h2>
+            <ExportButtons results={searchResults.results} />
+          </div>
+          {searchResults.results.length > 0 ? (
+            <ResultsTable
+              results={searchResults.results}
+              showScore={true}
+            />
+          ) : (
+            <div className="bg-white rounded-lg border border-gray-200 p-8 text-center text-gray-400">
+              No matching leads found. Try broadening your search criteria.
+            </div>
+          )}
+          <PipelineStats stats={searchResults.stats} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── All Leads tab ────────────────────────────────────────────────────────────
+
+function AllLeadsView() {
+  const [leads, setLeads] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
+  const [keyword, setKeyword] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [loading, setLoading] = useState(false);
+  const limit = 50;
+
+  const loadLeads = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ limit, offset });
+      if (keyword) params.set('keyword', keyword);
+      if (statusFilter) params.set('status', statusFilter);
+      const data = await apiFetch(`/api/leads?${params}`);
+      setLeads(data.items || []);
+      setTotal(data.total || 0);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  }, [offset, keyword, statusFilter]);
+
+  useEffect(() => { loadLeads(); }, [loadLeads]);
+
+  const handleEnrich = async (lead) => {
+    try {
+      await apiFetch(`/api/leads/${lead.id}/enrich`, { method: 'POST' });
+      loadLeads();
+    } catch (err) {
+      alert(`Enrich failed: ${err.message}`);
+    }
+  };
+
+  const exportAll = async (format) => {
+    try {
+      const params = new URLSearchParams();
+      if (keyword) params.set('keyword', keyword);
+      if (statusFilter) params.set('status', statusFilter);
+      const res = await fetch(`/api/leads/export`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ format, limit: 10000, offset: 0 }),
+      });
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `leads.${format}`; a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      alert(`Export failed: ${err.message}`);
+    }
+  };
+
+  const tableResults = leads.map(l => ({
+    ...l,
+    name: `${l.first_name || ''} ${l.last_name || ''}`.trim(),
+    title: l.job_title,
+    company: l.company_name,
+    linkedin: l.linkedin_url,
+    source: l.source,
+    enrichment_status: l.enrichment_status,
+    relevance_score: 0,
+    confidence: l.confidence_score,
+  }));
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3 flex-wrap">
+        <h2 className="font-semibold text-gray-800 text-lg">All Leads</h2>
+        <span className="text-sm text-gray-500">{total} total</span>
+        <div className="ml-auto flex gap-2 flex-wrap">
+          <input
+            type="text"
+            placeholder="Search name, email, company..."
+            value={keyword}
+            onChange={e => { setKeyword(e.target.value); setOffset(0); }}
+            className="border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 w-56"
+          />
+          <select
+            value={statusFilter}
+            onChange={e => { setStatusFilter(e.target.value); setOffset(0); }}
+            className="border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+          >
+            <option value="">All Statuses</option>
+            {['raw','enriched','verified','contacted','responded','qualified','disqualified','opted_out'].map(s => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+          <button onClick={() => exportAll('csv')}
+            className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 text-gray-700">
+            ⬇ CSV
+          </button>
+          <button onClick={() => exportAll('json')}
+            className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 text-gray-700">
+            ⬇ JSON
+          </button>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="text-center py-12 text-gray-400">Loading...</div>
+      ) : leads.length === 0 ? (
+        <div className="bg-white rounded-lg border border-gray-200 p-8 text-center text-gray-400">
+          No leads found. Use the Dashboard to discover leads.
+        </div>
+      ) : (
+        <ResultsTable
+          results={tableResults}
+          showScore={false}
+          onEnrich={handleEnrich}
+        />
+      )}
+
+      {/* Pagination */}
+      {total > limit && (
+        <div className="flex items-center justify-between py-2">
+          <span className="text-sm text-gray-500">
+            Showing {offset + 1}–{Math.min(offset + limit, total)} of {total}
+          </span>
+          <div className="flex gap-2">
+            <button
+              disabled={offset === 0}
+              onClick={() => setOffset(Math.max(0, offset - limit))}
+              className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-40"
+            >
+              ← Prev
+            </button>
+            <button
+              disabled={offset + limit >= total}
+              onClick={() => setOffset(offset + limit)}
+              className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-40"
+            >
+              Next →
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Campaigns tab ────────────────────────────────────────────────────────────
+
+function CampaignsView() {
+  const [campaigns, setCampaigns] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [selected, setSelected] = useState(null);
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState('');
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const data = await apiFetch('/api/campaigns');
+      setCampaigns(Array.isArray(data) ? data : (data.items || []));
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const createCampaign = async () => {
+    if (!newName.trim()) return;
+    try {
+      await apiFetch('/api/campaigns', {
+        method: 'POST',
+        body: JSON.stringify({ name: newName.trim(), sequence_steps: [], settings_override: {} }),
+      });
+      setNewName(''); setCreating(false);
+      load();
+    } catch (err) {
+      alert(`Create failed: ${err.message}`);
+    }
+  };
+
+  const StatPill = ({ label, value, color }) => (
+    <div className="text-center">
+      <div className={`text-lg font-bold ${color}`}>{value}</div>
+      <div className="text-xs text-gray-500">{label}</div>
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="font-semibold text-gray-800 text-lg">Campaigns</h2>
+        <button
+          onClick={() => setCreating(true)}
+          className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">
+          + New Campaign
+        </button>
+      </div>
+
+      {creating && (
+        <div className="bg-white rounded-lg border border-gray-200 p-4 shadow-sm">
+          <h3 className="text-sm font-semibold text-gray-700 mb-2">Create Campaign</h3>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              placeholder="Campaign name..."
+              value={newName}
+              onChange={e => setNewName(e.target.value)}
+              className="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+              onKeyDown={e => e.key === 'Enter' && createCampaign()}
+              autoFocus
+            />
+            <button onClick={createCampaign}
+              className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+              Create
+            </button>
+            <button onClick={() => setCreating(false)}
+              className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 text-gray-600">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="text-center py-12 text-gray-400">Loading...</div>
+      ) : campaigns.length === 0 ? (
+        <div className="bg-white rounded-lg border border-gray-200 p-8 text-center text-gray-400">
+          No campaigns yet. Create your first campaign to start outreach.
+        </div>
+      ) : (
+        <div className="grid gap-3">
+          {campaigns.map(c => (
+            <div
+              key={c.id}
+              className={`bg-white rounded-lg border shadow-sm p-4 cursor-pointer transition-colors ${
+                selected?.id === c.id ? 'border-blue-400 bg-blue-50' : 'border-gray-200 hover:border-gray-300'
+              }`}
+              onClick={() => setSelected(selected?.id === c.id ? null : c)}
+            >
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="font-medium text-gray-800">{c.name}</h3>
+                  <p className="text-xs text-gray-500 mt-0.5">{c.step_count || 0} steps · Created {c.created_at?.slice(0,10) || '—'}</p>
+                </div>
+                <StatusBadge status={c.status} />
+              </div>
+
+              {selected?.id === c.id && c.stats && (
+                <div className="mt-4 pt-4 border-t border-gray-100">
+                  <div className="grid grid-cols-5 gap-4 text-center">
+                    <StatPill label="Sent" value={c.stats.sent || 0} color="text-blue-600" />
+                    <StatPill label="Opened" value={c.stats.opened || 0} color="text-green-600" />
+                    <StatPill label="Replied" value={c.stats.replied || 0} color="text-purple-600" />
+                    <StatPill label="Bounced" value={c.stats.bounced || 0} color="text-red-500" />
+                    <StatPill label="Opted Out" value={c.stats.opted_out || 0} color="text-gray-500" />
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Compliance tab ───────────────────────────────────────────────────────────
+
+function ComplianceView() {
+  const [suppression, setSuppression] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [optOutEmail, setOptOutEmail] = useState('');
+  const [dsarEmail, setDsarEmail] = useState('');
+  const [dsarResult, setDsarResult] = useState(null);
+  const [msg, setMsg] = useState('');
+
+  const loadSuppression = async () => {
+    setLoading(true);
+    try {
+      const data = await apiFetch('/api/compliance/suppression');
+      setSuppression(data.suppression_list || data.items || data || []);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadSuppression(); }, []);
+
+  const addOptOut = async () => {
+    if (!optOutEmail.trim()) return;
+    try {
+      await apiFetch('/api/compliance/opt-out', {
+        method: 'POST',
+        body: JSON.stringify({ email: optOutEmail.trim(), reason: 'manual' }),
+      });
+      setMsg(`✓ ${optOutEmail} added to suppression list`);
+      setOptOutEmail('');
+      loadSuppression();
+      setTimeout(() => setMsg(''), 3000);
+    } catch (err) {
+      setMsg(`✗ ${err.message}`);
+    }
+  };
+
+  const dsarExport = async () => {
+    if (!dsarEmail.trim()) return;
+    try {
+      const data = await apiFetch('/api/compliance/dsar/export', {
+        method: 'POST',
+        body: JSON.stringify({ email: dsarEmail.trim() }),
+      });
+      setDsarResult(data);
+    } catch (err) {
+      setMsg(`✗ ${err.message}`);
+    }
+  };
+
+  const dsarDelete = async () => {
+    if (!dsarEmail.trim()) return;
+    if (!confirm(`Delete all data for ${dsarEmail}? This cannot be undone.`)) return;
+    try {
+      const data = await apiFetch('/api/compliance/dsar/delete', {
+        method: 'POST',
+        body: JSON.stringify({ email: dsarEmail.trim() }),
+      });
+      setMsg(`✓ Data deleted for ${dsarEmail}`);
+      setDsarEmail('');
+      setDsarResult(null);
+    } catch (err) {
+      setMsg(`✗ ${err.message}`);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <h2 className="font-semibold text-gray-800 text-lg">Compliance (GDPR / CCPA)</h2>
+
+      {msg && (
+        <div className={`rounded-lg px-4 py-2 text-sm ${msg.startsWith('✓') ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-600 border border-red-200'}`}>
+          {msg}
+        </div>
+      )}
+
+      {/* Opt-out */}
+      <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-4">
+        <h3 className="text-sm font-semibold text-gray-700 mb-3">Add to Suppression List</h3>
+        <div className="flex gap-2">
+          <input
+            type="email"
+            placeholder="email@example.com"
+            value={optOutEmail}
+            onChange={e => setOptOutEmail(e.target.value)}
+            className="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 mono"
+            onKeyDown={e => e.key === 'Enter' && addOptOut()}
+          />
+          <button onClick={addOptOut}
+            className="px-4 py-1.5 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700">
+            Opt Out
+          </button>
+        </div>
+      </div>
+
+      {/* DSAR */}
+      <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-4">
+        <h3 className="text-sm font-semibold text-gray-700 mb-3">Data Subject Access Request (DSAR)</h3>
+        <div className="flex gap-2 mb-3">
+          <input
+            type="email"
+            placeholder="Subject's email address"
+            value={dsarEmail}
+            onChange={e => setDsarEmail(e.target.value)}
+            className="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 mono"
+          />
+          <button onClick={dsarExport}
+            className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+            Export (Art. 15)
+          </button>
+          <button onClick={dsarDelete}
+            className="px-3 py-1.5 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700">
+            Delete (Art. 17)
+          </button>
+        </div>
+        {dsarResult && (
+          <pre className="bg-gray-50 border border-gray-200 rounded p-3 text-xs overflow-auto max-h-48 mono">
+            {JSON.stringify(dsarResult, null, 2)}
+          </pre>
+        )}
+      </div>
+
+      {/* Suppression list */}
+      <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
+        <div className="px-4 py-3 border-b border-gray-100 bg-gray-50 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-gray-700">
+            Suppression List ({suppression.length})
+          </h3>
+          <button onClick={loadSuppression}
+            className="text-xs text-blue-600 hover:text-blue-800">
+            Refresh
+          </button>
+        </div>
+        {loading ? (
+          <div className="p-8 text-center text-gray-400">Loading...</div>
+        ) : suppression.length === 0 ? (
+          <div className="p-8 text-center text-gray-400">No suppressions yet.</div>
+        ) : (
+          <div className="overflow-auto max-h-80">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 border-b border-gray-200">
+                <tr>
+                  <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500">Email</th>
+                  <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500">Reason</th>
+                  <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500">Date</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {suppression.map((s, i) => (
+                  <tr key={i} className="hover:bg-gray-50">
+                    <td className="px-4 py-2 mono text-xs text-gray-700">{s.email}</td>
+                    <td className="px-4 py-2 text-xs text-gray-500">{s.reason || '—'}</td>
+                    <td className="px-4 py-2 text-xs text-gray-400">{(s.created_at || s.added_at || '')?.slice(0, 10) || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Navigation ───────────────────────────────────────────────────────────────
+
+function Navigation({ tab, setTab }) {
+  const tabs = [
+    { id: 'dashboard', label: '📊 Dashboard' },
+    { id: 'leads', label: '📋 All Leads' },
+    { id: 'campaigns', label: '📧 Campaigns' },
+    { id: 'compliance', label: '⚖️ Compliance' },
+  ];
+
+  return (
+    <nav className="bg-white border-t border-gray-200 shadow-sm">
+      <div className="max-w-7xl mx-auto px-4">
+        <div className="flex">
+          {tabs.map(t => (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              className={`flex-1 md:flex-none px-6 py-4 text-sm font-medium text-gray-600 hover:text-gray-800 transition-colors ${
+                tab === t.id ? 'tab-active font-semibold' : ''
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </nav>
+  );
+}
+
+// ─── Root App ─────────────────────────────────────────────────────────────────
+
+function App() {
+  const [tab, setTab] = useState('dashboard');
+
+  return (
+    <div className="min-h-screen flex flex-col">
+      {/* Header */}
+      <header className="bg-gray-900 text-white shadow-lg">
+        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <span className="text-lg font-bold tracking-tight">NETWORKING ENGINE</span>
+            <span className="text-xs bg-blue-600 text-white px-2 py-0.5 rounded font-mono">v5.0</span>
+          </div>
+          <div className="flex items-center gap-4">
+            <a href="/docs" target="_blank"
+              className="text-sm text-gray-400 hover:text-white transition-colors">
+              API Docs
+            </a>
+            <span className="text-gray-500">⚙️</span>
+          </div>
+        </div>
+      </header>
+
+      {/* Main content */}
+      <main className="flex-1 max-w-7xl mx-auto w-full px-4 py-6">
+        {tab === 'dashboard' && <DashboardView />}
+        {tab === 'leads' && <AllLeadsView />}
+        {tab === 'campaigns' && <CampaignsView />}
+        {tab === 'compliance' && <ComplianceView />}
+      </main>
+
+      {/* Bottom navigation */}
+      <Navigation tab={tab} setTab={setTab} />
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

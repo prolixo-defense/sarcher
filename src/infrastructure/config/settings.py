@@ -66,6 +66,12 @@ class Settings(BaseSettings):
     embedding_model: str = "all-MiniLM-L6-v2"
     chroma_persist_dir: str = "./data/chroma"
 
+    # --- Phase 5: Search / Discovery ---
+    serp_api_key: str = ""            # SerpAPI (100 searches/month free)
+    google_cse_api_key: str = ""      # Google Custom Search API (100/day free)
+    google_cse_id: str = ""           # Custom Search Engine ID
+    search_provider: str = "duckduckgo"  # serpapi | google_cse | duckduckgo
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
