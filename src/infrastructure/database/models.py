@@ -85,6 +85,11 @@ class OrganizationModel(Base):
     technologies = Column(JSONEncodedList, nullable=False, default=list)
     source = Column(String(50), nullable=False, default="manual")
     raw_data = Column(JSONEncodedDict, nullable=True)
+    cage_code = Column(String(10), nullable=True, index=True)
+    uei = Column(String(12), nullable=True, index=True)
+    naics_codes = Column(JSONEncodedList, nullable=True)
+    size_band = Column(String(20), nullable=True)
+    segment = Column(String(50), nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(DateTime(timezone=True), nullable=False,
                         server_default=func.now(), onupdate=func.now())

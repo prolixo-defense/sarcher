@@ -72,6 +72,9 @@ class Settings(BaseSettings):
     google_cse_id: str = ""           # Custom Search Engine ID
     search_provider: str = "duckduckgo"  # serpapi | google_cse | duckduckgo
 
+    # --- Phase 6: Scaled Discovery ---
+    sam_gov_api_key: str = ""         # SAM.gov Entity API (free, register at sam.gov/data-services)
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

@@ -82,10 +82,10 @@ class TestFallbackQueries:
         assert isinstance(queries, list)
         assert len(queries) >= 1
 
-    def test_caps_at_five(self):
+    def test_caps_at_eight(self):
         stub = QueryInterpretation(target_titles=["CTO"])
         queries = _fallback_queries("CTO", stub)
-        assert len(queries) <= 5
+        assert len(queries) <= 9  # 8 base + 1 optional title query
 
     def test_includes_base_query(self):
         stub = QueryInterpretation()

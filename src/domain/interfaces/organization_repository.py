@@ -34,6 +34,10 @@ class OrganizationRepository(ABC):
         ...
 
     @abstractmethod
+    def find_by_cage_code(self, cage_code: str) -> Organization | None:
+        ...
+
+    @abstractmethod
     def upsert(self, org: Organization) -> Organization:
         """Insert or update based on domain match."""
         ...

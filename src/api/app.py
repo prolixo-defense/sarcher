@@ -16,8 +16,8 @@ _STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 def create_app() -> FastAPI:
     app = FastAPI(
         title="Networking Engine API",
-        description="B2B networking extraction engine — Phases 1-5",
-        version="5.0.0",
+        description="B2B networking extraction engine — Phases 1-6",
+        version="6.0.0",
     )
 
     app.add_middleware(
@@ -48,7 +48,7 @@ def create_app() -> FastAPI:
 
     @app.get("/health", tags=["health"])
     def health():
-        return {"status": "ok", "version": "5.0.0"}
+        return {"status": "ok", "version": "6.0.0"}
 
     @app.on_event("startup")
     def on_startup():

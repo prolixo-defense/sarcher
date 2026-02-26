@@ -19,6 +19,8 @@ class DataSource(str, Enum):
     APOLLO = "apollo"
     HUNTER = "hunter"
     MANUAL = "manual"
+    SAM_GOV = "sam_gov"
+    JOB_POSTING = "job_posting"
 
 
 class EnrichmentStatus(str, Enum):

@@ -19,6 +19,11 @@ class Organization:
     description: str | None = None
     technologies: list[str] = field(default_factory=list)
     raw_data: dict[str, Any] | None = None
+    cage_code: str | None = None
+    uei: str | None = None
+    naics_codes: list[str] = field(default_factory=list)
+    size_band: str | None = None
+    segment: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 

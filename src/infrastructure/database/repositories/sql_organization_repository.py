@@ -22,6 +22,11 @@ def _model_to_entity(m: OrganizationModel) -> Organization:
         technologies=list(m.technologies or []),
         source=DataSource(m.source),
         raw_data=m.raw_data,
+        cage_code=m.cage_code,
+        uei=m.uei,
+        naics_codes=list(m.naics_codes or []),
+        size_band=m.size_band,
+        segment=m.segment,
         created_at=m.created_at if m.created_at.tzinfo else m.created_at.replace(tzinfo=timezone.utc),
         updated_at=m.updated_at if m.updated_at.tzinfo else m.updated_at.replace(tzinfo=timezone.utc),
     )
@@ -40,6 +45,9 @@ class SqlOrganizationRepository(OrganizationRepository):
             "annual_revenue": org.annual_revenue, "location": org.location,
             "description": org.description, "technologies": org.technologies,
             "source": org.source.value, "raw_data": org.raw_data,
+            "cage_code": org.cage_code, "uei": org.uei,
+            "naics_codes": org.naics_codes, "size_band": org.size_band,
+            "segment": org.segment,
             "created_at": org.created_at, "updated_at": org.updated_at,
         }
         if existing:
@@ -87,6 +95,12 @@ class SqlOrganizationRepository(OrganizationRepository):
             self._session.flush()
             return True
         return False
+
+    def find_by_cage_code(self, cage_code: str) -> Organization | None:
+        m = self._session.query(OrganizationModel).filter(
+            OrganizationModel.cage_code == cage_code
+        ).first()
+        return _model_to_entity(m) if m else None
 
     def upsert(self, org: Organization) -> Organization:
         if org.domain:
